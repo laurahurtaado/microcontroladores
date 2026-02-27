@@ -1,0 +1,88 @@
+        LIST P=16F877A
+        #include <P16F877A.INC>
+
+        __CONFIG _CP_OFF & _WDT_OFF & _PWRTE_ON & _XT_OSC
+
+        ORG 0x00
+        GOTO START
+
+;============================
+; VARIABLES
+;============================
+        CBLOCK 0x20
+            CONT1
+            CONT2
+            CONT3
+            LOOP1
+            LOOP2
+        ENDC
+
+;============================
+; PROGRAMA PRINCIPAL
+;============================
+START
+        BSF STATUS, RP0      ; Banco 1
+        CLRF TRISB           ; Puerto B como salida
+        BCF STATUS, RP0      ; Banco 0
+        CLRF PORTB
+
+MAIN
+
+; -------- 5 parpadeos de 1s --------
+        MOVLW 0x05
+        MOVWF LOOP1
+
+PARPADEO1
+        BSF PORTB, 0         ; LED ON
+        CALL DELAY_1S
+        BCF PORTB, 0         ; LED OFF
+        CALL DELAY_1S
+        DECFSZ LOOP1, F
+        GOTO PARPADEO1
+
+; -------- 2 parpadeos de 2s --------
+        MOVLW 0x02
+        MOVWF LOOP2
+
+PARPADEO2
+        BSF PORTB, 0
+        CALL DELAY_2S
+        BCF PORTB, 0
+        CALL DELAY_2S
+        DECFSZ LOOP2, F
+        GOTO PARPADEO2
+
+        GOTO MAIN
+
+;============================
+; RETARDO 1 SEGUNDO (aprox)
+;============================
+DELAY_1S
+        MOVLW D'250'
+        MOVWF CONT1
+D1
+        MOVLW D'250'
+        MOVWF CONT2
+D2
+        MOVLW D'20'
+        MOVWF CONT3
+D3
+        DECFSZ CONT3, F
+        GOTO D3
+        DECFSZ CONT2, F
+        GOTO D2
+        DECFSZ CONT1, F
+        GOTO D1
+        RETURN
+
+;============================
+; RETARDO 2 SEGUNDOS
+;============================
+DELAY_2S
+        CALL DELAY_1S
+        CALL DELAY_1S
+        RETURN
+
+        END
+
+
