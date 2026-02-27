@@ -1,124 +1,79 @@
-;========================================================================
-; PIC18F4550 - LED Blink con Timer0
-; 1 segundo encendido
-; 2 segundos apagado
-; Oscilador interno 4 MHz
-;========================================================================
+;=========================================================
+; PIC18F4550
+; LED en RB0
+; 1 segundo ENCENDIDO
+; 2 segundos APAGADO
+; Oscilador interno
+;=========================================================
 
-        #include <xc.inc>        ; Incluye definiciones del PIC
+#include <xc.inc>          ; Librería del ensamblador para PIC18
 
-;==============================
-; CONFIGURACIÓN
-;==============================
-        CONFIG  FOSC   = INTOSCIO_EC   ; Oscilador interno
-        CONFIG  WDT    = OFF           ; Watchdog desactivado
-        CONFIG  LVP    = OFF           ; Programación baja tensión OFF
-        CONFIG  PBADEN = OFF           ; PORTB digital
-        CONFIG  MCLRE  = OFF           ; MCLR deshabilitado
-        CONFIG  XINST  = OFF           ; Instrucciones extendidas OFF
-        CONFIG  PWRT   = ON            ; Power-up Timer ON
-        CONFIG  DEBUG  = OFF           ; Debug OFF
+;================ CONFIGURACIÓN ==========================
+CONFIG  FOSC = INTOSCIO_EC ; Oscilador interno
+CONFIG  WDT = OFF          ; Watchdog deshabilitado
+CONFIG  LVP = OFF          ; Programación en bajo voltaje OFF
+CONFIG  PBADEN = OFF       ; PORTB como digital
 
-;==============================
-; VARIABLES
-;==============================
-        PSECT   udata_acs          ; Sección de datos en access bank
-contador:      DS 1                ; Variable para contar interrupciones
-estado:        DS 1                ; 0 = apagado, 1 = encendido
+;================ VECTOR DE RESET ========================
+PSECT resetVec, class=CODE, reloc=2
+ORG 0x00                   ; Dirección 0 (reset)
+GOTO Inicio                ; Salta al inicio del programa
 
-;==============================
-; VECTORES
-;==============================
-        PSECT  resetVec, class=CODE, reloc=2
-        ORG     0x00               ; Dirección de reset
-        GOTO    INIT               ; Salta a inicialización
+;================ CÓDIGO PRINCIPAL =======================
+PSECT main_code, class=CODE, reloc=2
 
-        PSECT  intVec, class=CODE, reloc=2
-        ORG     0x08               ; Vector de interrupción
-        GOTO    ISR                ; Salta a rutina ISR
+Inicio:
+    CLRF    TRISB, a       ; Configura todo PORTB como salida
+    CLRF    LATB, a        ; Inicializa PORTB en 0 (LED apagado)
 
-;==============================
-; INICIO
-;==============================
-INIT:
-        MOVLW   0b01100010         ; Configura 4 MHz interno
-        MOVWF   OSCCON, a          ; Carga configuración en OSCCON
+Loop:
+    BSF     LATB, 0, a     ; Pone RB0 en 1 ? LED encendido
+    CALL    Retardo_1s     ; Espera 1 segundo
 
-        BCF     TRISD, 0, a        ; RD0 como salida
-        BSF     LATD,  0, a        ; LED inicia encendido
+    BCF     LATB, 0, a     ; Pone RB0 en 0 ? LED apagado
+    CALL    Retardo_2s     ; Espera 2 segundos
 
-        MOVLW   0x01
-        MOVWF   estado, a          ; Estado inicial = encendido
-        CLRF    contador, a        ; Contador inicia en 0
+    GOTO    Loop           ; Repite el ciclo infinitamente
 
-;==============================
-; CONFIGURACIÓN TIMER0
-;==============================
-        MOVLW   0b10000111         ; Timer0 ON, 16 bits, prescaler 1:256
-        MOVWF   T0CON, a           ; Guarda configuración
+;================ RETARDO BASE (1 SEGUNDO) ===============
+Retardo_1s:
+    MOVLW   25             ; Carga 25 en W
+    MOVWF   ContExt, a     ; Guarda en contador externo
 
-        MOVLW   0xFF               ; Precarga alta
-        MOVWF   TMR0H, a
-        MOVLW   0xD9               ; Precarga baja (~10 ms)
-        MOVWF   TMR0L, a
+LoopExterno:
+    MOVLW   250            ; Carga 250 en W
+    MOVWF   ContInt, a     ; Guarda en contador interno
 
-        BCF     INTCON, 2, a       ; Limpia bandera TMR0IF
-        BSF     INTCON, 5, a       ; Habilita interrupción Timer0
-        BSF     INTCON, 7, a       ; Habilita interrupciones globales
+LoopInterno:
+    NOP                    ; No operation (consume tiempo)
+    NOP
+    NOP
 
-;==============================
-; LOOP PRINCIPAL
-;==============================
-MAIN_LOOP:
-        SLEEP                      ; Micro en bajo consumo
-        NOP
-        GOTO    MAIN_LOOP          ; Espera interrupciones
+    DECFSZ  ContInt, F, a  ; Decrementa contador interno
+    GOTO    LoopInterno    ; Si no es cero, repite
 
-;==============================
-; ISR - TIMER0
-;==============================
-ISR:
-        BTFSS   INTCON, 2, a       ; Verifica si fue Timer0
-        RETFIE                    ; Si no, salir
+    DECFSZ  ContExt, F, a  ; Decrementa contador externo
+    GOTO    LoopExterno    ; Si no es cero, repite
 
-        BCF     INTCON, 2, a       ; Limpia bandera
+    RETURN                 ; Regresa a donde fue llamada
 
-        MOVLW   0xFF               ; Recarga Timer0
-        MOVWF   TMR0H, a
-        MOVLW   0xD9
-        MOVWF   TMR0L, a
+;================ RETARDO 2 SEGUNDOS =====================
+Retardo_2s:
+    MOVLW   2              ; Queremos repetir 2 veces el retardo de 1s
+    MOVWF   Cont2s, a      ; Guarda en variable
 
-        INCF    contador, f, a     ; Incrementa contador
+Loop2s:
+    CALL    Retardo_1s     ; Llama al retardo de 1 segundo
+    DECFSZ  Cont2s, F, a   ; Decrementa contador
+    GOTO    Loop2s         ; Si no es cero, repite
 
-        MOVF    estado, W, a       ; Revisa estado actual
-        BTFSC   STATUS, 2          ; ¿estado = 0?
-        GOTO    LED_APAGADO        ; Si sí, ir a sección apagado
+    RETURN                 ; Regresa al programa principal
 
-;==============================
-; LED ENCENDIDO (1 segundo)
-;==============================
-LED_ENCENDIDO:
-        MOVLW   100                ; 100 interrupciones = 1 segundo
-        CPFSEQ  contador, a        ; ¿contador == 100?
-        RETFIE                    ; Si no, salir
+;================ VARIABLES EN RAM =======================
+PSECT udata
 
-        CLRF    contador, a        ; Reinicia contador
-        BCF     LATD, 0, a         ; Apaga LED
-        CLRF    estado, a          ; Cambia estado a apagado
-        RETFIE
+ContExt: DS 1              ; Contador externo
+ContInt: DS 1              ; Contador interno
+Cont2s:  DS 1              ; Contador para 2 segundos
 
-;==============================
-; LED APAGADO (2 segundos)
-;==============================
-LED_APAGADO:
-        MOVLW   200                ; 200 interrupciones = 2 segundos
-        CPFSEQ  contador, a        ; ¿contador == 200?
-        RETFIE                    ; Si no, salir
-
-        CLRF    contador, a        ; Reinicia contador
-        BSF     LATD, 0, a         ; Enciende LED
-        MOVLW   0x01
-        MOVWF   estado, a          ; Cambia estado a encendido
-        RETFIE
-
-        END
+END                        ; Fin del programa
