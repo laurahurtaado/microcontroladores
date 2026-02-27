@@ -37,7 +37,7 @@ Loop:
 
 ;================ RETARDO BASE (1 SEGUNDO) ===============
 Retardo_1s:
-    MOVLW   25             ; Carga 25 en W
+    MOVLW   80             ; <<<<<< CAMBIO AQUÍ (antes era 25)
     MOVWF   ContExt, a     ; Guarda en contador externo
 
 LoopExterno:
