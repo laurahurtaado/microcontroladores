@@ -17,9 +17,9 @@ Inicio:
     MOVWF   OSCCON
 
     CLRF    TRISB
-    CLRF    LATB
+    
 
-    MOVLW   0b00010000
+    
     MOVWF   TRISA
 
     CLRF    SecuenciaActual
@@ -56,18 +56,15 @@ Secuencia3:
 
 CambiarSecuencia:
     CALL    Retardo_200ms
-    BTFSC   PORTA, 4
-    RETURN
+
 
     INCF    SecuenciaActual, F
-    MOVLW   4
+    MOVLW   3
     SUBWF   SecuenciaActual, W
     BNZ     FinCambio
     CLRF    SecuenciaActual
 
 FinCambio:
-    CLRF    LATB
-    CALL    Retardo_500ms
     RETURN
 
 ; ===== secuencia 0 desplazamiento simple =====
@@ -144,13 +141,6 @@ LoopExterno1s:
     MOVLW   0b11111010
     MOVWF   ContadorInterno
 LoopInterno1s:
-    NOP
-    NOP
-    NOP
-    NOP
-    NOP
-    NOP
-    NOP
     NOP
     DECFSZ  ContadorInterno, F
     GOTO    LoopInterno1s
