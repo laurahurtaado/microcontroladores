@@ -1,0 +1,208 @@
+#include <xc.inc>   ;incluimos definiciones del esamblador para pic18f4550
+;confi de bits de configuración (Fuses)
+CONFIG  FOSC = INTOSCIO_EC; para usar oscilador interno a 8 Mhz
+CONFIG  WDT = OFF;deshabilita el whatchgog timer
+CONFIG  LVP = OFF; // la programacion en bajo voltaje
+CONFIG  PBADEN = OFF// configura los pines de portB como digitales
+;================vectores de inicio=================
+PSECT  resetVec, class=CODE, reloc=2
+ORG     0x00
+GOTO    Inicio
+;===========codigo principal======================
+PSECT  main_code, class=CODE, reloc=2
+
+Inicio:
+    ;===========configurar oscilador interno a 4Mhz=========
+    MOVLW   0b01100010
+    MOVWF   OSCCON
+
+    CLRF    TRISB
+    CLRF    LATB
+
+    MOVLW   0b00010000
+    MOVWF   TRISA
+
+    CLRF    SecuenciaActual
+
+MainLoop:
+
+    ; ===== =====
+    BTFSC   PORTA, 4
+    CALL    CambiarSecuencia
+
+    MOVF    SecuenciaActual, W
+    BNZ     Secuencia1
+
+    CALL    SecuenciaDesplazamiento
+    GOTO    MainLoop
+
+Secuencia1:
+    DECF    WREG, W
+    BNZ     Secuencia2
+
+    CALL    SecuenciaCarrera
+    GOTO    MainLoop
+
+Secuencia2:
+    DECF    WREG, W
+    BNZ     Secuencia3
+
+    CALL    SecuenciaBinario
+    GOTO    MainLoop
+
+Secuencia3:
+    CALL    SecuenciaAlternancia
+    GOTO    MainLoop
+
+CambiarSecuencia:
+    CALL    Retardo_200ms
+    BTFSC   PORTA, 4
+    RETURN
+
+    INCF    SecuenciaActual, F
+    MOVLW   4
+    SUBWF   SecuenciaActual, W
+    BNZ     FinCambio
+    CLRF    SecuenciaActual
+
+FinCambio:
+    CLRF    LATB
+    CALL    Retardo_500ms
+    RETURN
+
+; ===== secuencia 0 desplazamiento simple =====
+SecuenciaDesplazamiento:
+    MOVLW   0b00000010   
+    MOVWF   LATB
+    CALL    Retardo_1s
+
+    MOVLW   0b00000100
+    MOVWF   LATB
+    CALL    Retardo_1s
+
+    MOVLW   0b00001000
+    MOVWF   LATB
+    CALL    Retardo_1s
+
+    MOVLW   0b00000001
+    MOVWF   LATB
+    CALL    Retardo_1s
+    RETURN
+
+SecuenciaCarrera:
+    MOVLW   0b00001111
+    MOVWF   LATB
+    CALL    Retardo_1s
+
+    MOVLW   0b00000000
+    MOVWF   LATB
+    CALL    Retardo_1s
+
+    MOVLW   0b00001111
+    MOVWF   LATB
+    CALL    Retardo_1s
+
+    MOVLW   0b00000000
+    MOVWF   LATB
+    CALL    Retardo_1s
+    RETURN
+
+; ===== Secuencia 1 carrera de Leds =====
+SecuenciaBinario:
+    MOVLW   0b00001111
+    MOVWF   LATB
+    CALL    Retardo_1s
+
+    MOVLW   0b00000000
+    MOVWF   LATB
+    CALL    Retardo_1s
+
+    MOVLW   0b00001111   
+    MOVWF   LATB
+    CALL    Retardo_1s
+
+    MOVLW   0b00000000
+    MOVWF   LATB
+    CALL    Retardo_1s
+    RETURN
+
+SecuenciaAlternancia:
+    MOVLW   0b00000101
+    MOVWF   LATB
+    CALL    Retardo_1s
+
+    MOVLW   0b00001010
+    MOVWF   LATB
+    CALL    Retardo_1s
+    RETURN
+
+; ===== secuencia 3: alternancia de pares =====
+Retardo_1s:
+    MOVLW   0b01111000   
+    MOVWF   ContadorExterno
+LoopExterno1s:
+    MOVLW   0b11111010
+    MOVWF   ContadorInterno
+LoopInterno1s:
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    DECFSZ  ContadorInterno, F
+    GOTO    LoopInterno1s
+    DECFSZ  ContadorExterno, F
+    GOTO    LoopExterno1s
+    RETURN
+
+Retardo_500ms:
+    MOVLW   0b01001100
+    MOVWF   ContadorExterno
+LoopExterno500ms:
+    MOVLW   0b11111010
+    MOVWF   ContadorInterno
+LoopInterno500ms:
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    DECFSZ  ContadorInterno, F
+    GOTO    LoopInterno500ms
+    DECFSZ  ContadorExterno, F
+    GOTO    LoopExterno500ms
+    RETURN
+
+Retardo_200ms:
+    MOVLW   0b00110010
+    MOVWF   ContadorExterno
+LoopExterno200ms:
+    MOVLW   0b11111010
+    MOVWF   ContadorInterno
+LoopInterno200ms:
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    DECFSZ  ContadorInterno, F
+    GOTO    LoopInterno200ms
+    DECFSZ  ContadorExterno, F
+    GOTO    LoopExterno200ms
+    RETURN
+
+PSECT udata
+ContadorExterno:   DS 1
+ContadorInterno:   DS 1
+SecuenciaActual:   DS 1
+
+END
