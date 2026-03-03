@@ -1,0 +1,114 @@
+; PIC18F4550
+#include <xc.inc>
+
+;===============================================
+; Configuración de bits de configuración (Fuses)
+;===============================================
+CONFIG  FOSC = INTOSCIO_EC
+CONFIG  WDT = OFF
+CONFIG  LVP = OFF
+CONFIG  PBADEN = OFF
+
+;===============================================
+; Vectores de inicio
+;===============================================
+PSECT  resetVec, class=CODE, reloc=2
+ORG     0x00
+GOTO    Inicio
+
+;===============================================
+; Definición de Variables (RAM)
+;===============================================
+PSECT udata
+Loop1:  DS 1                 ; contador de 5 parpadeos
+Loop2:  DS 1                 ; contador de 2 parpadeos
+
+;===============================================
+; Código Principal
+;===============================================
+PSECT  main_code, class=CODE, reloc=2
+
+Inicio:
+
+    ;-------------------------------------------
+    MOVLW   0x76
+    MOVWF   OSCCON
+
+    ;-------------------------------------------
+    MOVLW   0xF0
+    MOVWF   TRISB
+    CLRF    LATB
+
+MainLoop:
+    ;========================================================
+    ; Bloque 1: 5 parpadeos de 1 segundo (10s total)
+    ;========================================================
+    MOVLW   5
+    MOVWF   Loop1
+
+Parpadeo_1s:
+    BSF     LATB, 0           ; LED ON
+    CALL    Retardo_1s
+    BCF     LATB, 0           ; LED OFF
+    CALL    Retardo_1s
+    DECFSZ  Loop1, F
+    GOTO    Parpadeo_1s
+
+    ;========================================================
+    ; Bloque 2: 2 parpadeos de 2 segundos
+    ;========================================================
+    MOVLW   2
+    MOVWF   Loop2
+
+Parpadeo_2s:
+    BSF     LATB, 0
+    CALL    Retardo_2s
+    BCF     LATB, 0
+    CALL    Retardo_2s
+    DECFSZ  Loop2, F
+    GOTO    Parpadeo_2s
+
+    GOTO    MainLoop
+
+;===============================================
+; Retardos 
+;===============================================
+
+Retardo_250ms:
+
+    MOVLW   0xB0
+    MOVWF   T1CON
+
+     MOVLW   0x2B
+    MOVWF   TMR1H
+    MOVLW   0x1C
+    MOVWF   TMR1L
+
+    BCF     PIR1, 0
+
+        BSF     T1CON, 0
+
+Espera_T1:
+    BTFSS   PIR1, 0
+    GOTO    Espera_T1
+
+    
+    BCF     T1CON, 0
+    BCF     PIR1, 0
+    RETURN
+
+Retardo_1s:
+    
+    CALL    Retardo_250ms
+    CALL    Retardo_250ms
+    CALL    Retardo_250ms
+    CALL    Retardo_250ms
+    RETURN
+
+Retardo_2s:
+    
+    CALL    Retardo_1s
+    CALL    Retardo_1s
+    RETURN
+
+END
