@@ -17,18 +17,24 @@ Inicio:
     MOVWF   OSCCON
 
     CLRF    TRISB
-    
+    CLRF    LATB
 
-    
+    ;RA4- BOTON SECUENCIA
+    ;RA3- BOTON VELOCIDAD
+    MOVLW   0b00011000
     MOVWF   TRISA
 
     CLRF    SecuenciaActual
+    CLRF    VelocidadActual
 
 MainLoop:
 
-    ; ===== =====
+    ; ==== Botón cambiar secuencia (RA4)= =====
     BTFSC   PORTA, 4
     CALL    CambiarSecuencia
+    ;====== Botón cambiar velocidad (RA3)=======
+    BTFSS   PORTA, 3
+    CALL    CambiarVelocidad
 
     MOVF    SecuenciaActual, W
     BNZ     Secuencia1
@@ -39,120 +45,161 @@ MainLoop:
 Secuencia1:
     DECF    WREG, W
     BNZ     Secuencia2
-
     CALL    SecuenciaCarrera
     GOTO    MainLoop
 
 Secuencia2:
     DECF    WREG, W
     BNZ     Secuencia3
-
     CALL    SecuenciaBinario
     GOTO    MainLoop
 
 Secuencia3:
     CALL    SecuenciaAlternancia
     GOTO    MainLoop
-
+;======== cambiar secuencia (igual) ===========
 CambiarSecuencia:
     CALL    Retardo_200ms
-
+    BTFS    PORTA, 4
+    RETURN
 
     INCF    SecuenciaActual, F
-    MOVLW   3
+    MOVLW   4
     SUBWF   SecuenciaActual, W
     BNZ     FinCambio
     CLRF    SecuenciaActual
 
 FinCambio:
+    CLRF  LATB 
+    CALL Retardo_500ms
+    RETURN
+
+;======CAMBIAR VELOCIDAD===============
+ CambiarVelocidad:
+     CALL  Retardo_200ms
+     BTFSC PORTA, 3
+     RETURN
+
+     INFC  VelocidActual, F
+     MOVLW 3
+     SUBWF VelocidaActual, W
+     BNZ   FinVel
+     CLRF  VelocidadActual
+
+ FinVel:
+    RETURN
+; =======RETARDO SEGÚN VELOCIDAD=======
+
+RetardoSegunVelocidad:
+    MOVF    VelocidadActual,W
+    BNZ     Vel1
+
+    CALL    Retardo_1s
+    RETURN
+
+Vel1:
+    DECF    WREG,W
+    BNZ     Vel2
+    CALL    Retardo_500ms
+    RETURN
+
+Vel2:
+    CALL    Retardo_200ms
     RETURN
 
 ; ===== secuencia 0 desplazamiento simple =====
 SecuenciaDesplazamiento:
     MOVLW   0b00000010   
     MOVWF   LATB
-    CALL    Retardo_1s
+    CALL    RetardoSegunVelocidad ; Solo cambie el retardo para que dependa de la velocidad
 
     MOVLW   0b00000100
     MOVWF   LATB
-    CALL    Retardo_1s
+    CALL    RetardoSegunVelocidad
 
     MOVLW   0b00001000
     MOVWF   LATB
-    CALL    Retardo_1s
+    CALL    RetardoSegunVelocidad
 
     MOVLW   0b00000001
     MOVWF   LATB
-    CALL    Retardo_1s
+    CALL    RetardoSegunVelocidad
     RETURN
 
 SecuenciaCarrera:
     MOVLW   0b00001111
     MOVWF   LATB
-    CALL    Retardo_1s
+    CALL    RetardoSegunVelocidad
 
     MOVLW   0b00000000
     MOVWF   LATB
-    CALL    Retardo_1s
+    CALL    RetardoSegunVelocidad
 
     MOVLW   0b00001111
     MOVWF   LATB
-    CALL    Retardo_1s
+    CALL    RetardoSegunVelocidad
 
     MOVLW   0b00000000
     MOVWF   LATB
-    CALL    Retardo_1s
+    CALL    RetardoSegunVelocidad
     RETURN
 
 ; ===== Secuencia 1 carrera de Leds =====
 SecuenciaBinario:
     MOVLW   0b00001111
     MOVWF   LATB
-    CALL    Retardo_1s
+    CALL    RetardoSegunVelocidad
 
     MOVLW   0b00000000
     MOVWF   LATB
-    CALL    Retardo_1s
+    CALL    RetardoSegunVelocidad
 
     MOVLW   0b00001111   
     MOVWF   LATB
-    CALL    Retardo_1s
+    CALL    RetardoSegunVelocidad
 
     MOVLW   0b00000000
     MOVWF   LATB
-    CALL    Retardo_1s
+    CALL    RetardoSegunVelocidad
     RETURN
 
 SecuenciaAlternancia:
     MOVLW   0b00000101
     MOVWF   LATB
-    CALL    Retardo_1s
+    CALL    RetardoSegunVelocidad
 
     MOVLW   0b00001010
     MOVWF   LATB
-    CALL    Retardo_1s
+    CALL    RetardoSegunVelocidad
     RETURN
 
-; ===== secuencia 3: alternancia de pares =====
+; ==========
 Retardo_1s:
-    MOVLW   0b01111000   
+    MOVLW   155  
     MOVWF   ContadorExterno
 LoopExterno1s:
-    MOVLW   0b11111010
+    MOVLW   250
     MOVWF   ContadorInterno
 LoopInterno1s:
     NOP
-    DECFSZ  ContadorInterno, F
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    DECFSZ  ContadorInterno,F
     GOTO    LoopInterno1s
-    DECFSZ  ContadorExterno, F
+    DECFSZ  ContadorExterno,F
     GOTO    LoopExterno1s
     RETURN
 
 Retardo_500ms:
-    MOVLW   0b01001100
+    MOVLW   76
     MOVWF   ContadorExterno
 LoopExterno500ms:
-    MOVLW   0b11111010
+    MOVLW   250
     MOVWF   ContadorInterno
 LoopInterno500ms:
     NOP
@@ -170,10 +217,10 @@ LoopInterno500ms:
     RETURN
 
 Retardo_200ms:
-    MOVLW   0b00110010
+    MOVLW   50
     MOVWF   ContadorExterno
 LoopExterno200ms:
-    MOVLW   0b11111010
+    MOVLW   250
     MOVWF   ContadorInterno
 LoopInterno200ms:
     NOP
