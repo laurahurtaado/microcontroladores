@@ -1,0 +1,212 @@
+
+#include <xc.inc>
+
+CONFIG  FOSC = INTOSCIO_EC
+CONFIG  WDT = OFF
+CONFIG  LVP = OFF
+CONFIG  PBADEN = OFF
+
+PSECT  resetVec, class=CODE, reloc=2
+ORG     0x00
+GOTO    Inicio
+
+PSECT udata
+Secuencia:  DS 1     
+BtnPrev:    DS 1     
+Vel:        DS 1     
+Temp:       DS 1    
+
+PSECT  main_code, class=CODE, reloc=2
+
+Inicio:
+    MOVLW   0x76
+    MOVWF   OSCCON
+
+    MOVLW   0x0F
+    MOVWF   ADCON1
+
+    MOVLW   0xF0
+    MOVWF   TRISB
+    CLRF    LATB
+
+    MOVLW   0x30
+    MOVWF   TRISA
+
+    CLRF    Secuencia
+    CLRF    BtnPrev
+    CLRF    Vel
+
+MainLoop:
+    CALL    LeerEntradas
+
+    MOVF    Secuencia, W
+    BZ      Seq0
+    ADDLW   0xFF        
+    BZ      Seq1
+    ADDLW   0xFF        
+    BZ      Seq2
+    GOTO    Seq3
+
+Seq0:
+    MOVLW   0x01
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x02
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x04
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x08
+    MOVWF   LATB
+    CALL    DelayPaso
+    GOTO    MainLoop
+
+Seq1:
+    MOVLW   0x01
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x02
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x04
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x08
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x04
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x02
+    MOVWF   LATB
+    CALL    DelayPaso
+    GOTO    MainLoop
+
+Seq2:
+    MOVLW   0x05
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x0A
+    MOVWF   LATB
+    CALL    DelayPaso
+    GOTO    MainLoop
+
+Seq3:
+    CLRF    Temp
+
+ContBin:
+    MOVF    Temp, W
+    ANDLW   0x0F
+    MOVWF   LATB
+    CALL    DelayPaso
+
+    INCF    Temp, F
+
+    MOVF    Temp, W
+    XORLW   0x10
+    BZ      FinSeq3
+    GOTO    ContBin
+
+FinSeq3:
+    GOTO    MainLoop
+
+LeerEntradas:
+    CLRF    Vel
+    BTFSC   PORTA, 5
+    INCF    Vel, F
+
+    BTFSC   PORTA, 4
+    GOTO    BotonSuelto
+
+    MOVF    BtnPrev, W
+    BNZ     FinLeer
+
+    
+    CALL    Retardo_20ms
+    BTFSC   PORTA, 4
+    GOTO    FinLeer
+
+  
+    MOVLW   1
+    MOVWF   BtnPrev
+
+      INCF    Secuencia, F
+
+  
+    MOVF    Secuencia, W
+    XORLW   0x04
+    BZ      ResetSeq
+    GOTO    FinLeer
+
+ResetSeq:
+    CLRF    Secuencia
+    GOTO    FinLeer
+
+BotonSuelto:
+    CLRF    BtnPrev
+
+FinLeer:
+    RETURN
+
+DelayPaso:
+    MOVF    Vel, W
+    BZ      Lento
+    CALL    Retardo_125ms
+    RETURN
+Lento:
+    CALL    Retardo_250ms
+    RETURN
+
+Retardo_20ms:
+    BCF     T1CON, 0
+    MOVLW   0xB0
+    MOVWF   T1CON
+    MOVLW   0xEC
+    MOVWF   TMR1H
+    MOVLW   0x78
+    MOVWF   TMR1L
+    BCF     PIR1, 0
+    BSF     T1CON, 0
+W20:
+    BTFSS   PIR1, 0
+    GOTO    W20
+    BCF     T1CON, 0
+    BCF     PIR1, 0
+    RETURN
+
+Retardo_125ms:
+    BCF     T1CON, 0
+    MOVLW   0xB0
+    MOVWF   T1CON
+    MOVLW   0x85
+    MOVWF   TMR1H
+    MOVLW   0xEE
+    MOVWF   TMR1L
+    BCF     PIR1, 0
+    BSF     T1CON, 0
+W125:
+    BTFSS   PIR1, 0
+    GOTO    W125
+    BCF     T1CON, 0
+    BCF     PIR1, 0
+    RETURN
+    
+Retardo_250ms:
+    BCF     T1CON, 0
+    MOVLW   0xB0
+    MOVWF   T1CON
+    MOVLW   0x0B
+    MOVWF   TMR1H
+    MOVLW   0xDC
+    MOVWF   TMR1L
+    BCF     PIR1, 0
+    BSF     T1CON, 0
+W250:
+    BTFSS   PIR1, 0
+    GOTO    W250
+    BCF     T1CON, 0
+    BCF     PIR1, 0
+    RETURN
+
+END
