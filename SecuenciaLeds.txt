@@ -1,0 +1,47 @@
+#include <xc.inc>
+
+CONFIG  FOSC = INTOSCIO_EC
+CONFIG  WDT = OFF
+CONFIG  LVP = OFF
+CONFIG  PBADEN = OFF
+
+
+PSECT  resetVec, class=CODE, reloc=2
+ORG     0x00
+GOTO    Inicio
+
+
+PSECT udata
+Secuencia:  DS 1     
+BtnPrev:    DS 1     
+Vel:        DS 1     
+Temp:       DS 1     
+Cont:       DS 1     
+
+;===============================================
+; Código Principal
+;===============================================
+PSECT  main_code, class=CODE, reloc=2
+
+Inicio:
+    
+    MOVLW   0x76
+    MOVWF   OSCCON
+
+    
+    MOVLW   0x0F
+    MOVWF   ADCON1
+
+    MOVLW   0xF0
+    MOVWF   TRISB
+    CLRF    LATB
+
+    
+    MOVLW   b'00110000'
+    MOVWF   TRISA
+
+    CLRF    Secuencia
+    CLRF    BtnPrev
+    CLRF    Vel
+
+

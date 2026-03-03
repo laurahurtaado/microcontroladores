@@ -1,0 +1,87 @@
+; PIC18F4550
+#include <xc.inc>
+
+;===============================================
+; Configuración
+;===============================================
+CONFIG  FOSC = INTOSCIO_EC
+CONFIG  WDT = OFF
+CONFIG  LVP = OFF
+CONFIG  PBADEN = OFF
+
+
+PSECT  resetVec, class=CODE, reloc=2
+ORG     0x00
+GOTO    Inicio
+
+;===============================================
+; Código principal
+;===============================================
+PSECT  main_code, class=CODE, reloc=2
+
+Inicio:
+    ; Oscilador interno ~8MHz
+    MOVLW   0x76
+    MOVWF   OSCCON
+
+    ; RB0 salida
+    MOVLW   0xF0
+    MOVWF   TRISB
+    CLRF    LATB
+
+MainLoop:
+
+    ; LED encendido 1 segundo
+    BSF     LATB, 0
+    CALL    Retardo_1s
+
+    ; LED apagado 2 segundos
+    BCF     LATB, 0
+    CALL    Retardo_2s
+
+    GOTO    MainLoop
+
+;===============================================
+; Retardos con Timer1
+;===============================================
+; Fosc = 8MHz
+; tick = 4us (prescaler 1:8)
+
+Retardo_250ms:
+    BCF     T1CON, 0
+
+    MOVLW   0xB0
+    MOVWF   T1CON
+
+   
+    MOVLW   0x2B
+    MOVWF   TMR1H
+    MOVLW   0x1C
+    MOVWF   TMR1L
+
+    BCF     PIR1, 0
+    BSF     T1CON, 0
+
+Espera_T1:
+    BTFSS   PIR1, 0
+    GOTO    Espera_T1
+
+    BCF     T1CON, 0
+    BCF     PIR1, 0
+    RETURN
+
+Retardo_1s:
+    CALL    Retardo_250ms
+    CALL    Retardo_250ms
+    CALL    Retardo_250ms
+    CALL    Retardo_250ms
+    RETURN
+
+Retardo_2s:
+    CALL    Retardo_1s
+    CALL    Retardo_1s
+    RETURN
+
+END
+
+

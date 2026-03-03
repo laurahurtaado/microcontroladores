@@ -1,0 +1,227 @@
+#include <xc.inc>
+
+CONFIG  FOSC = INTOSCIO_EC
+CONFIG  WDT = OFF
+CONFIG  LVP = OFF
+CONFIG  PBADEN = OFF
+
+
+PSECT  resetVec, class=CODE, reloc=2
+ORG     0x00
+GOTO    Inicio
+
+
+PSECT udata
+Secuencia:  DS 1     
+BtnPrev:    DS 1     
+Vel:        DS 1     
+Temp:       DS 1     
+Cont:       DS 1     
+
+;===============================================
+; Código Principal
+;===============================================
+PSECT  main_code, class=CODE, reloc=2
+
+Inicio:
+    
+    MOVLW   0x76
+    MOVWF   OSCCON
+
+    
+    MOVLW   0x0F
+    MOVWF   ADCON1
+
+    MOVLW   0xF0
+    MOVWF   TRISB
+    CLRF    LATB
+
+    
+    MOVLW   b'00110000'
+    MOVWF   TRISA
+
+    CLRF    Secuencia
+    CLRF    BtnPrev
+    CLRF    Vel
+
+MainLoop:
+    CALL    LeerEntradas
+
+    
+    MOVF    Secuencia, W
+    BZ      Seq0
+    DECF    WREG, W
+    BZ      Seq1
+    DECF    WREG, W
+    BZ      Seq2
+    GOTO    Seq3
+
+Seq0:
+    MOVLW   0x01
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x02
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x04
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x08
+    MOVWF   LATB
+    CALL    DelayPaso
+    GOTO    MainLoop
+
+
+Seq1:
+    MOVLW   0x01
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x02
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x04
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x08
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x04
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x02
+    MOVWF   LATB
+    CALL    DelayPaso
+    GOTO    MainLoop
+
+
+Seq2:
+    MOVLW   0x05          
+    MOVWF   LATB
+    CALL    DelayPaso
+    MOVLW   0x0A          
+    MOVWF   LATB
+    CALL    DelayPaso
+    GOTO    MainLoop
+
+Seq3:
+    CLRF    Temp          
+
+ContBin:
+    MOVF    Temp, W
+    ANDLW   0x0F          
+    MOVWF   LATB
+    CALL    DelayPaso
+
+    INCF    Temp, F
+    MOVLW   16
+    CPFSEQ  Temp          
+    GOTO    ContBin
+
+    GOTO    MainLoop
+
+LeerEntradas:
+    CLRF    Vel
+    BTFSC   PORTA, 5      
+    MOVLW   1
+    BTFSC   PORTA, 5
+    MOVWF   Vel
+
+    BTFSC   PORTA, 4
+    GOTO    BotonSuelto
+
+    MOVF    BtnPrev, W
+    BNZ     FinLeer
+
+    CALL    Retardo_20ms
+    BTFSC   PORTA, 4      
+    GOTO    FinLeer
+
+    ; Confirmado: cambio de secuencia
+    MOVLW   1
+    MOVWF   BtnPrev
+
+    INCF    Secuencia, F
+    MOVLW   4
+    CPFSLT  Secuencia     ; si Secuencia < 4, ok
+    CLRF    Secuencia     ; si llegó a 4, vuelve a 0
+
+    GOTO    FinLeer
+
+BotonSuelto:
+    CLRF    BtnPrev
+
+FinLeer:
+    RETURN
+
+;===============================================
+; DelayPaso: usa velocidad
+; Vel=0 -> lento
+; Vel=1 -> rápido
+;===============================================
+DelayPaso:
+    MOVF    Vel, W
+    BZ      Lento
+
+    ; Rápido (125ms aprox)
+    CALL    Retardo_125ms
+    RETURN
+
+Lento:
+    ; Lento (250ms aprox)
+    CALL    Retardo_250ms
+    RETURN
+
+
+
+Retardo_20ms:
+    BCF     T1CON, 0
+    MOVLW   0xB0
+    MOVWF   T1CON
+    MOVLW   0xEC
+    MOVWF   TMR1H
+    MOVLW   0x78
+    MOVWF   TMR1L
+    BCF     PIR1, 0
+    BSF     T1CON, 0
+W20:
+    BTFSS   PIR1, 0
+    GOTO    W20
+    BCF     T1CON, 0
+    BCF     PIR1, 0
+    RETURN
+
+Retardo_125ms:
+    BCF     T1CON, 0
+    MOVLW   0xB0
+    MOVWF   T1CON
+    MOVLW   0x85
+    MOVWF   TMR1H
+    MOVLW   0xEE
+    MOVWF   TMR1L
+    BCF     PIR1, 0
+    BSF     T1CON, 0
+W125:
+    BTFSS   PIR1, 0
+    GOTO    W125
+    BCF     T1CON, 0
+    BCF     PIR1, 0
+    RETURN
+
+Retardo_250ms:
+    BCF     T1CON, 0
+    MOVLW   0xB0
+    MOVWF   T1CON
+    MOVLW   0x0B
+    MOVWF   TMR1H
+    MOVLW   0xDC
+    MOVWF   TMR1L
+    BCF     PIR1, 0
+    BSF     T1CON, 0
+W250:
+    BTFSS   PIR1, 0
+    GOTO    W250
+    BCF     T1CON, 0
+    BCF     PIR1, 0
+    RETURN
+
+END
