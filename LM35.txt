@@ -1,0 +1,122 @@
+#include <xc.h>
+#include <stdint.h>
+
+#define _XTAL_FREQ 8000000
+
+#pragma config FOSC = INTOSCIO_EC
+#pragma config WDT = OFF
+#pragma config LVP = OFF
+#pragma config PBADEN = OFF
+#pragma config MCLRE = ON
+#pragma config PLLDIV = 1
+#pragma config CPUDIV = OSC1_PLL2
+#pragma config USBDIV = 2
+#pragma config FCMEN = OFF
+#pragma config IESO = OFF
+
+#define LM35_CHANNEL       0
+
+#define HEATER_TRIS        TRISDbits.TRISD1
+#define HEATER_LAT         LATDbits.LATD1
+
+#define TEMP_ON_LIMIT      24
+#define TEMP_OFF_LIMIT     27
+
+void ADC_Init(void);
+uint16_t ADC_Read(uint8_t channel);
+uint8_t LM35_GetTemperatureC(void);
+void Heater_Control(uint8_t temperature);
+
+void main(void)
+{
+    OSCCONbits.IRCF = 0b111;
+    OSCCONbits.SCS = 0b10;
+
+    HEATER_TRIS = 0;
+    HEATER_LAT = 0;
+
+    ADC_Init();
+
+    while (1)
+    {
+        uint8_t temperature;
+
+        temperature = LM35_GetTemperatureC();
+
+        Heater_Control(temperature);
+
+        __delay_ms(1000);
+    }
+}
+
+void ADC_Init(void)
+{
+    TRISAbits.TRISA0 = 1;
+
+    ADCON1 = 0x0E;
+
+    ADCON2bits.ADFM = 1;
+    ADCON2bits.ACQT = 0b010;
+    ADCON2bits.ADCS = 0b110;
+
+    ADCON0bits.CHS = LM35_CHANNEL;
+    ADCON0bits.ADON = 1;
+
+    __delay_ms(10);
+}
+
+uint16_t ADC_Read(uint8_t channel)
+{
+    uint16_t result;
+
+    ADCON0bits.CHS = channel;
+
+    __delay_us(20);
+
+    ADCON0bits.GO_DONE = 1;
+
+    while (ADCON0bits.GO_DONE);
+
+    result = ((uint16_t)ADRESH << 8) | ADRESL;
+
+    return result;
+}
+
+uint8_t LM35_GetTemperatureC(void)
+{
+    uint16_t adc_value;
+    uint16_t temperature;
+
+    adc_value = ADC_Read(LM35_CHANNEL);
+
+    /*
+       LM35 entrega 10 mV por cada grado Celsius.
+       Con Vref = 5 V y ADC de 10 bits:
+       Voltaje = adc_value * 5000 mV / 1023
+       Temperatura = Voltaje / 10
+       Temperatura = adc_value * 500 / 1023
+    */
+
+    temperature = (uint16_t)(((uint32_t)adc_value * 500UL) / 1023UL);
+
+    if (temperature > 100)
+        temperature = 100;
+
+    return (uint8_t)temperature;
+}
+
+void Heater_Control(uint8_t temperature)
+{
+    static uint8_t heater_state = 0;
+
+    if (temperature <= TEMP_ON_LIMIT)
+    {
+        heater_state = 1;
+    }
+    else if (temperature >= TEMP_OFF_LIMIT)
+    {
+        heater_state = 0;
+    }
+
+    HEATER_LAT = heater_state;
+}
