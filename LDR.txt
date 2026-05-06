@@ -1,0 +1,120 @@
+#include <xc.h>
+#include <stdint.h>
+
+#define _XTAL_FREQ 8000000
+
+#pragma config FOSC = INTOSCIO_EC
+#pragma config WDT = OFF
+#pragma config LVP = OFF
+#pragma config PBADEN = OFF
+#pragma config MCLRE = ON
+#pragma config PLLDIV = 1
+#pragma config CPUDIV = OSC1_PLL2
+#pragma config USBDIV = 2
+#pragma config FCMEN = OFF
+#pragma config IESO = OFF
+
+#define LDR_CHANNEL          1
+
+#define LIGHT_TRIS           TRISDbits.TRISD2
+#define LIGHT_LAT            LATDbits.LATD2
+
+#define DARK_LIMIT           35
+#define BRIGHT_LIMIT         50
+
+void System_Init(void);
+void ADC_Init(void);
+uint16_t ADC_Read(uint8_t channel);
+uint8_t LDR_GetLightPercent(void);
+void Light_Control(uint8_t light_percent);
+
+void main(void)
+{
+    uint8_t light_percent;
+
+    System_Init();
+
+    while (1)
+    {
+        light_percent = LDR_GetLightPercent();
+
+        Light_Control(light_percent);
+
+        __delay_ms(1000);
+    }
+}
+
+void System_Init(void)
+{
+    OSCCONbits.IRCF = 0b111;
+    OSCCONbits.SCS = 0b10;
+
+    LIGHT_TRIS = 0;
+    LIGHT_LAT = 0;
+
+    ADC_Init();
+}
+
+void ADC_Init(void)
+{
+    TRISAbits.TRISA1 = 1;
+
+    ADCON1 = 0x0D;
+
+    ADCON2bits.ADFM = 1;
+    ADCON2bits.ACQT = 0b010;
+    ADCON2bits.ADCS = 0b110;
+
+    ADCON0bits.CHS = LDR_CHANNEL;
+    ADCON0bits.ADON = 1;
+
+    __delay_ms(10);
+}
+
+uint16_t ADC_Read(uint8_t channel)
+{
+    uint16_t result;
+
+    ADCON0bits.CHS = channel;
+
+    __delay_us(20);
+
+    ADCON0bits.GO_DONE = 1;
+
+    while (ADCON0bits.GO_DONE);
+
+    result = ((uint16_t)ADRESH << 8) | ADRESL;
+
+    return result;
+}
+
+uint8_t LDR_GetLightPercent(void)
+{
+    uint16_t adc_value;
+    uint8_t light_percent;
+
+    adc_value = ADC_Read(LDR_CHANNEL);
+
+    light_percent = (uint8_t)(((uint32_t)adc_value * 100UL) / 1023UL);
+
+    if (light_percent > 100)
+        light_percent = 100;
+
+    return light_percent;
+}
+
+void Light_Control(uint8_t light_percent)
+{
+    static uint8_t light_state = 0;
+
+    if (light_percent <= DARK_LIMIT)
+    {
+        light_state = 1;
+    }
+    else if (light_percent >= BRIGHT_LIMIT)
+    {
+        light_state = 0;
+    }
+
+    LIGHT_LAT = light_state;
+}
