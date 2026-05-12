@@ -1,0 +1,880 @@
+#include <xc.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#define _XTAL_FREQ 8000000
+
+#pragma config FOSC = INTOSCIO_EC
+#pragma config WDT = OFF
+#pragma config LVP = OFF
+#pragma config PBADEN = OFF
+#pragma config MCLRE = ON
+#pragma config PLLDIV = 1
+#pragma config CPUDIV = OSC1_PLL2
+#pragma config USBDIV = 2
+#pragma config FCMEN = OFF
+#pragma config IESO = OFF
+
+#define LM35_CHANNEL        0
+#define LDR_CHANNEL         1
+#define MQ135_CHANNEL       2
+
+#define BME280_ADDR         0x76
+#define BME280_ADDR_W       (BME280_ADDR << 1)
+#define BME280_ADDR_R       ((BME280_ADDR << 1) | 1)
+
+#define FAN_TRIS            TRISDbits.TRISD0
+#define FAN_LAT             LATDbits.LATD0
+
+#define HEATER_TRIS         TRISDbits.TRISD1
+#define HEATER_LAT          LATDbits.LATD1
+
+#define LIGHT_TRIS          TRISDbits.TRISD2
+#define LIGHT_LAT           LATDbits.LATD2
+
+#define ALARM_TRIS          TRISDbits.TRISD3
+#define ALARM_LAT           LATDbits.LATD3
+
+#define LCD_RS_TRIS         TRISCbits.TRISC0
+#define LCD_EN_TRIS         TRISCbits.TRISC1
+#define LCD_RS              LATCbits.LATC0
+#define LCD_EN              LATCbits.LATC1
+
+#define TEMP_ON_LIMIT       24
+#define TEMP_OFF_LIMIT      27
+
+#define HUM_ON_LIMIT        70
+#define HUM_OFF_LIMIT       60
+
+#define DARK_LIMIT          35
+#define BRIGHT_LIMIT        50
+
+#define AIR_BAD_LIMIT       65
+#define AIR_SAFE_LIMIT      50
+
+#define FILTER_SIZE         5
+
+uint16_t dig_T1;
+int16_t dig_T2, dig_T3;
+
+uint8_t dig_H1, dig_H3;
+int16_t dig_H2, dig_H4, dig_H5;
+int8_t dig_H6;
+
+int32_t t_fine;
+
+uint8_t fan_state = 0;
+uint8_t heater_state = 0;
+uint8_t light_state = 0;
+uint8_t alarm_state = 0;
+
+void System_Init(void);
+
+void ADC_Init(void);
+uint16_t ADC_Read(uint8_t channel);
+
+void I2C_Init(void);
+void I2C_Wait(void);
+void I2C_Start(void);
+void I2C_RepeatedStart(void);
+void I2C_Stop(void);
+uint8_t I2C_Write(uint8_t data);
+uint8_t I2C_Read(uint8_t ack);
+
+void BME280_WriteRegister(uint8_t reg, uint8_t value);
+uint8_t BME280_ReadRegister(uint8_t reg);
+uint16_t BME280_Read16_LE(uint8_t reg);
+int16_t BME280_ReadS16_LE(uint8_t reg);
+uint8_t BME280_CheckSensor(void);
+void BME280_Init(void);
+void BME280_ReadCalibration(void);
+int32_t BME280_ReadRawTemperature(void);
+int32_t BME280_ReadRawHumidity(void);
+int32_t BME280_CompensateTemperature(int32_t adc_T);
+uint32_t BME280_CompensateHumidity(int32_t adc_H);
+uint8_t BME280_GetHumidityPercent(void);
+
+uint8_t LM35_GetTemperatureC(void);
+uint8_t LDR_GetLightPercent(void);
+uint8_t MQ135_GetAirQualityPercent(void);
+
+uint8_t Filter_Temperature(uint8_t value);
+uint8_t Filter_Light(uint8_t value);
+uint8_t Filter_Air(uint8_t value);
+uint8_t Filter_Humidity(uint8_t value);
+
+void Control_Heater(uint8_t temperature);
+void Control_Light(uint8_t light_percent);
+void Control_AirAlarm(uint8_t air_quality);
+void Control_Fan(uint8_t humidity, uint8_t air_quality);
+
+void LCD_Init(void);
+void LCD_Command(uint8_t cmd);
+void LCD_Char(char data);
+void LCD_String(const char *text);
+void LCD_SetCursor(uint8_t row, uint8_t column);
+void LCD_Clear(void);
+void LCD_SendNibble(uint8_t nibble);
+void LCD_EnablePulse(void);
+void LCD_ShowStatus(uint8_t temp, uint8_t hum, uint8_t light, uint8_t air);
+
+void main(void)
+{
+    uint8_t temperature_raw;
+    uint8_t humidity_raw;
+    uint8_t light_raw;
+    uint8_t air_raw;
+
+    uint8_t temperature;
+    uint8_t humidity;
+    uint8_t light;
+    uint8_t air;
+
+    uint8_t bme_ok;
+
+    System_Init();
+
+    LCD_Clear();
+    LCD_SetCursor(1, 1);
+    LCD_String("Sistema Ambiental");
+    LCD_SetCursor(2, 1);
+    LCD_String("Inicializando...");
+    __delay_ms(1500);
+
+    bme_ok = BME280_CheckSensor();
+
+    if (bme_ok)
+    {
+        BME280_Init();
+    }
+
+    while (1)
+    {
+        temperature_raw = LM35_GetTemperatureC();
+        light_raw = LDR_GetLightPercent();
+        air_raw = MQ135_GetAirQualityPercent();
+
+        if (bme_ok)
+        {
+            humidity_raw = BME280_GetHumidityPercent();
+        }
+        else
+        {
+            humidity_raw = 0;
+        }
+
+        temperature = Filter_Temperature(temperature_raw);
+        light = Filter_Light(light_raw);
+        air = Filter_Air(air_raw);
+        humidity = Filter_Humidity(humidity_raw);
+
+        Control_Heater(temperature);
+        Control_Light(light);
+        Control_AirAlarm(air);
+
+        if (bme_ok)
+        {
+            Control_Fan(humidity, air);
+        }
+        else
+        {
+            if (air >= AIR_BAD_LIMIT)
+            {
+                fan_state = 1;
+            }
+            else if (air <= AIR_SAFE_LIMIT)
+            {
+                fan_state = 0;
+            }
+
+            FAN_LAT = fan_state;
+        }
+
+        LCD_ShowStatus(temperature, humidity, light, air);
+
+        __delay_ms(1500);
+    }
+}
+
+void System_Init(void)
+{
+    OSCCONbits.IRCF = 0b111;
+    OSCCONbits.SCS = 0b10;
+
+    ADC_Init();
+    I2C_Init();
+
+    FAN_TRIS = 0;
+    HEATER_TRIS = 0;
+    LIGHT_TRIS = 0;
+    ALARM_TRIS = 0;
+
+    FAN_LAT = 0;
+    HEATER_LAT = 0;
+    LIGHT_LAT = 0;
+    ALARM_LAT = 0;
+
+    LCD_RS_TRIS = 0;
+    LCD_EN_TRIS = 0;
+
+    TRISBbits.TRISB4 = 0;
+    TRISBbits.TRISB5 = 0;
+    TRISBbits.TRISB6 = 0;
+    TRISBbits.TRISB7 = 0;
+
+    LCD_Init();
+}
+
+void ADC_Init(void)
+{
+    TRISAbits.TRISA0 = 1;
+    TRISAbits.TRISA1 = 1;
+    TRISAbits.TRISA2 = 1;
+
+    ADCON1 = 0x0C;
+
+    ADCON2bits.ADFM = 1;
+    ADCON2bits.ACQT = 0b010;
+    ADCON2bits.ADCS = 0b110;
+
+    ADCON0bits.CHS = 0;
+    ADCON0bits.ADON = 1;
+
+    __delay_ms(10);
+}
+
+uint16_t ADC_Read(uint8_t channel)
+{
+    uint16_t result;
+
+    ADCON0bits.CHS = channel;
+    __delay_us(25);
+
+    ADCON0bits.GO_DONE = 1;
+
+    while (ADCON0bits.GO_DONE);
+
+    result = ((uint16_t)ADRESH << 8) | ADRESL;
+
+    return result;
+}
+
+uint8_t LM35_GetTemperatureC(void)
+{
+    uint16_t adc_value;
+    uint16_t temperature;
+
+    adc_value = ADC_Read(LM35_CHANNEL);
+
+    temperature = (uint16_t)(((uint32_t)adc_value * 500UL) / 1023UL);
+
+    if (temperature > 100)
+    {
+        temperature = 100;
+    }
+
+    return (uint8_t)temperature;
+}
+
+uint8_t LDR_GetLightPercent(void)
+{
+    uint16_t adc_value;
+    uint8_t light_percent;
+
+    adc_value = ADC_Read(LDR_CHANNEL);
+
+    light_percent = (uint8_t)(((uint32_t)adc_value * 100UL) / 1023UL);
+
+    if (light_percent > 100)
+    {
+        light_percent = 100;
+    }
+
+    return light_percent;
+}
+
+uint8_t MQ135_GetAirQualityPercent(void)
+{
+    uint16_t adc_value;
+    uint8_t air_quality;
+
+    adc_value = ADC_Read(MQ135_CHANNEL);
+
+    air_quality = (uint8_t)(((uint32_t)adc_value * 100UL) / 1023UL);
+
+    if (air_quality > 100)
+    {
+        air_quality = 100;
+    }
+
+    return air_quality;
+}
+
+void I2C_Init(void)
+{
+    TRISBbits.TRISB0 = 1;
+    TRISBbits.TRISB1 = 1;
+
+    SSPSTAT = 0x80;
+    SSPCON1 = 0x28;
+    SSPCON2 = 0x00;
+
+    SSPADD = 19;
+
+    PIR1bits.SSPIF = 0;
+}
+
+void I2C_Wait(void)
+{
+    while ((SSPCON2 & 0x1F) || SSPSTATbits.R_nW);
+}
+
+void I2C_Start(void)
+{
+    I2C_Wait();
+    SSPCON2bits.SEN = 1;
+    while (SSPCON2bits.SEN);
+}
+
+void I2C_RepeatedStart(void)
+{
+    I2C_Wait();
+    SSPCON2bits.RSEN = 1;
+    while (SSPCON2bits.RSEN);
+}
+
+void I2C_Stop(void)
+{
+    I2C_Wait();
+    SSPCON2bits.PEN = 1;
+    while (SSPCON2bits.PEN);
+}
+
+uint8_t I2C_Write(uint8_t data)
+{
+    I2C_Wait();
+
+    SSPBUF = data;
+
+    while (!PIR1bits.SSPIF);
+    PIR1bits.SSPIF = 0;
+
+    return SSPCON2bits.ACKSTAT;
+}
+
+uint8_t I2C_Read(uint8_t ack)
+{
+    uint8_t data;
+
+    I2C_Wait();
+
+    SSPCON2bits.RCEN = 1;
+
+    while (!SSPSTATbits.BF);
+
+    data = SSPBUF;
+
+    I2C_Wait();
+
+    if (ack)
+    {
+        SSPCON2bits.ACKDT = 0;
+    }
+    else
+    {
+        SSPCON2bits.ACKDT = 1;
+    }
+
+    SSPCON2bits.ACKEN = 1;
+
+    while (SSPCON2bits.ACKEN);
+
+    return data;
+}
+
+void BME280_WriteRegister(uint8_t reg, uint8_t value)
+{
+    I2C_Start();
+    I2C_Write(BME280_ADDR_W);
+    I2C_Write(reg);
+    I2C_Write(value);
+    I2C_Stop();
+}
+
+uint8_t BME280_ReadRegister(uint8_t reg)
+{
+    uint8_t value;
+
+    I2C_Start();
+    I2C_Write(BME280_ADDR_W);
+    I2C_Write(reg);
+
+    I2C_RepeatedStart();
+    I2C_Write(BME280_ADDR_R);
+
+    value = I2C_Read(0);
+
+    I2C_Stop();
+
+    return value;
+}
+
+uint16_t BME280_Read16_LE(uint8_t reg)
+{
+    uint8_t lsb;
+    uint8_t msb;
+
+    lsb = BME280_ReadRegister(reg);
+    msb = BME280_ReadRegister(reg + 1);
+
+    return ((uint16_t)msb << 8) | lsb;
+}
+
+int16_t BME280_ReadS16_LE(uint8_t reg)
+{
+    return (int16_t)BME280_Read16_LE(reg);
+}
+
+uint8_t BME280_CheckSensor(void)
+{
+    uint8_t chip_id;
+
+    chip_id = BME280_ReadRegister(0xD0);
+
+    if (chip_id == 0x60)
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+void BME280_Init(void)
+{
+    BME280_WriteRegister(0xE0, 0xB6);
+    __delay_ms(100);
+
+    BME280_ReadCalibration();
+
+    BME280_WriteRegister(0xF2, 0x01);
+    BME280_WriteRegister(0xF4, 0x27);
+    BME280_WriteRegister(0xF5, 0xA0);
+
+    __delay_ms(100);
+}
+
+void BME280_ReadCalibration(void)
+{
+    uint8_t e4;
+    uint8_t e5;
+    uint8_t e6;
+
+    dig_T1 = BME280_Read16_LE(0x88);
+    dig_T2 = BME280_ReadS16_LE(0x8A);
+    dig_T3 = BME280_ReadS16_LE(0x8C);
+
+    dig_H1 = BME280_ReadRegister(0xA1);
+    dig_H2 = BME280_ReadS16_LE(0xE1);
+    dig_H3 = BME280_ReadRegister(0xE3);
+
+    e4 = BME280_ReadRegister(0xE4);
+    e5 = BME280_ReadRegister(0xE5);
+    e6 = BME280_ReadRegister(0xE6);
+
+    dig_H4 = ((int16_t)e4 << 4) | (e5 & 0x0F);
+    dig_H5 = ((int16_t)e6 << 4) | (e5 >> 4);
+    dig_H6 = (int8_t)BME280_ReadRegister(0xE7);
+}
+
+int32_t BME280_ReadRawTemperature(void)
+{
+    uint8_t msb;
+    uint8_t lsb;
+    uint8_t xlsb;
+    int32_t raw;
+
+    msb = BME280_ReadRegister(0xFA);
+    lsb = BME280_ReadRegister(0xFB);
+    xlsb = BME280_ReadRegister(0xFC);
+
+    raw = ((int32_t)msb << 12) | ((int32_t)lsb << 4) | ((int32_t)xlsb >> 4);
+
+    return raw;
+}
+
+int32_t BME280_ReadRawHumidity(void)
+{
+    uint8_t msb;
+    uint8_t lsb;
+    int32_t raw;
+
+    msb = BME280_ReadRegister(0xFD);
+    lsb = BME280_ReadRegister(0xFE);
+
+    raw = ((int32_t)msb << 8) | lsb;
+
+    return raw;
+}
+
+int32_t BME280_CompensateTemperature(int32_t adc_T)
+{
+    int32_t var1;
+    int32_t var2;
+    int32_t T;
+
+    var1 = ((((adc_T >> 3) - ((int32_t)dig_T1 << 1))) * ((int32_t)dig_T2)) >> 11;
+
+    var2 = (((((adc_T >> 4) - ((int32_t)dig_T1)) *
+              ((adc_T >> 4) - ((int32_t)dig_T1))) >> 12) *
+              ((int32_t)dig_T3)) >> 14;
+
+    t_fine = var1 + var2;
+
+    T = (t_fine * 5 + 128) >> 8;
+
+    return T;
+}
+
+uint32_t BME280_CompensateHumidity(int32_t adc_H)
+{
+    int32_t value;
+
+    value = t_fine - 76800;
+
+    value = (((((adc_H << 14) - (((int32_t)dig_H4) << 20) -
+                (((int32_t)dig_H5) * value)) + 16384) >> 15) *
+              (((((((value * ((int32_t)dig_H6)) >> 10) *
+                   (((value * ((int32_t)dig_H3)) >> 11) + 32768)) >> 10) +
+                 2097152) * ((int32_t)dig_H2) + 8192) >> 14));
+
+    value = value -
+            (((((value >> 15) * (value >> 15)) >> 7) *
+              ((int32_t)dig_H1)) >> 4);
+
+    if (value < 0)
+    {
+        value = 0;
+    }
+
+    if (value > 419430400)
+    {
+        value = 419430400;
+    }
+
+    return (uint32_t)(value >> 12);
+}
+
+uint8_t BME280_GetHumidityPercent(void)
+{
+    int32_t adc_T;
+    int32_t adc_H;
+    uint32_t humidity_x1024;
+    uint8_t humidity_percent;
+
+    adc_T = BME280_ReadRawTemperature();
+    BME280_CompensateTemperature(adc_T);
+
+    adc_H = BME280_ReadRawHumidity();
+    humidity_x1024 = BME280_CompensateHumidity(adc_H);
+
+    humidity_percent = (uint8_t)(humidity_x1024 / 1024);
+
+    if (humidity_percent > 100)
+    {
+        humidity_percent = 100;
+    }
+
+    return humidity_percent;
+}
+
+uint8_t Filter_Temperature(uint8_t value)
+{
+    static uint8_t buffer[FILTER_SIZE] = {0};
+    static uint8_t index = 0;
+    static uint8_t samples = 0;
+    uint16_t sum = 0;
+    uint8_t i;
+
+    buffer[index] = value;
+    index++;
+
+    if (index >= FILTER_SIZE)
+    {
+        index = 0;
+    }
+
+    if (samples < FILTER_SIZE)
+    {
+        samples++;
+    }
+
+    for (i = 0; i < samples; i++)
+    {
+        sum += buffer[i];
+    }
+
+    return (uint8_t)(sum / samples);
+}
+
+uint8_t Filter_Light(uint8_t value)
+{
+    static uint8_t buffer[FILTER_SIZE] = {0};
+    static uint8_t index = 0;
+    static uint8_t samples = 0;
+    uint16_t sum = 0;
+    uint8_t i;
+
+    buffer[index] = value;
+    index++;
+
+    if (index >= FILTER_SIZE)
+    {
+        index = 0;
+    }
+
+    if (samples < FILTER_SIZE)
+    {
+        samples++;
+    }
+
+    for (i = 0; i < samples; i++)
+    {
+        sum += buffer[i];
+    }
+
+    return (uint8_t)(sum / samples);
+}
+
+uint8_t Filter_Air(uint8_t value)
+{
+    static uint8_t buffer[FILTER_SIZE] = {0};
+    static uint8_t index = 0;
+    static uint8_t samples = 0;
+    uint16_t sum = 0;
+    uint8_t i;
+
+    buffer[index] = value;
+    index++;
+
+    if (index >= FILTER_SIZE)
+    {
+        index = 0;
+    }
+
+    if (samples < FILTER_SIZE)
+    {
+        samples++;
+    }
+
+    for (i = 0; i < samples; i++)
+    {
+        sum += buffer[i];
+    }
+
+    return (uint8_t)(sum / samples);
+}
+
+uint8_t Filter_Humidity(uint8_t value)
+{
+    static uint8_t buffer[FILTER_SIZE] = {0};
+    static uint8_t index = 0;
+    static uint8_t samples = 0;
+    uint16_t sum = 0;
+    uint8_t i;
+
+    buffer[index] = value;
+    index++;
+
+    if (index >= FILTER_SIZE)
+    {
+        index = 0;
+    }
+
+    if (samples < FILTER_SIZE)
+    {
+        samples++;
+    }
+
+    for (i = 0; i < samples; i++)
+    {
+        sum += buffer[i];
+    }
+
+    return (uint8_t)(sum / samples);
+}
+
+void Control_Heater(uint8_t temperature)
+{
+    if (temperature <= TEMP_ON_LIMIT)
+    {
+        heater_state = 1;
+    }
+    else if (temperature >= TEMP_OFF_LIMIT)
+    {
+        heater_state = 0;
+    }
+
+    HEATER_LAT = heater_state;
+}
+
+void Control_Light(uint8_t light_percent)
+{
+    if (light_percent <= DARK_LIMIT)
+    {
+        light_state = 1;
+    }
+    else if (light_percent >= BRIGHT_LIMIT)
+    {
+        light_state = 0;
+    }
+
+    LIGHT_LAT = light_state;
+}
+
+void Control_AirAlarm(uint8_t air_quality)
+{
+    static uint8_t bad_air_counter = 0;
+
+    if (air_quality >= AIR_BAD_LIMIT)
+    {
+        if (bad_air_counter < 5)
+        {
+            bad_air_counter++;
+        }
+    }
+    else if (air_quality <= AIR_SAFE_LIMIT)
+    {
+        bad_air_counter = 0;
+    }
+
+    if (bad_air_counter >= 3)
+    {
+        alarm_state = 1;
+    }
+    else
+    {
+        alarm_state = 0;
+    }
+
+    ALARM_LAT = alarm_state;
+}
+
+void Control_Fan(uint8_t humidity, uint8_t air_quality)
+{
+    if ((humidity >= HUM_ON_LIMIT) || (air_quality >= AIR_BAD_LIMIT))
+    {
+        fan_state = 1;
+    }
+    else if ((humidity <= HUM_OFF_LIMIT) && (air_quality <= AIR_SAFE_LIMIT))
+    {
+        fan_state = 0;
+    }
+
+    FAN_LAT = fan_state;
+}
+
+void LCD_Init(void)
+{
+    __delay_ms(20);
+
+    LCD_RS = 0;
+    LCD_EN = 0;
+
+    LCD_SendNibble(0x03);
+    __delay_ms(5);
+    LCD_SendNibble(0x03);
+    __delay_us(150);
+    LCD_SendNibble(0x03);
+    LCD_SendNibble(0x02);
+
+    LCD_Command(0x28);
+    LCD_Command(0x0C);
+    LCD_Command(0x06);
+    LCD_Command(0x01);
+
+    __delay_ms(2);
+}
+
+void LCD_SendNibble(uint8_t nibble)
+{
+    LATBbits.LATB4 = (nibble >> 0) & 0x01;
+    LATBbits.LATB5 = (nibble >> 1) & 0x01;
+    LATBbits.LATB6 = (nibble >> 2) & 0x01;
+    LATBbits.LATB7 = (nibble >> 3) & 0x01;
+
+    LCD_EnablePulse();
+}
+
+void LCD_EnablePulse(void)
+{
+    LCD_EN = 1;
+    __delay_us(2);
+    LCD_EN = 0;
+    __delay_us(50);
+}
+
+void LCD_Command(uint8_t cmd)
+{
+    LCD_RS = 0;
+
+    LCD_SendNibble(cmd >> 4);
+    LCD_SendNibble(cmd & 0x0F);
+
+    __delay_ms(2);
+}
+
+void LCD_Char(char data)
+{
+    LCD_RS = 1;
+
+    LCD_SendNibble(data >> 4);
+    LCD_SendNibble(data & 0x0F);
+
+    __delay_us(50);
+}
+
+void LCD_String(const char *text)
+{
+    while (*text)
+    {
+        LCD_Char(*text);
+        text++;
+    }
+}
+
+void LCD_SetCursor(uint8_t row, uint8_t column)
+{
+    uint8_t address;
+
+    if (row == 1)
+    {
+        address = 0x80 + (column - 1);
+    }
+    else
+    {
+        address = 0xC0 + (column - 1);
+    }
+
+    LCD_Command(address);
+}
+
+void LCD_Clear(void)
+{
+    LCD_Command(0x01);
+    __delay_ms(2);
+}
+
+void LCD_ShowStatus(uint8_t temp, uint8_t hum, uint8_t light, uint8_t air)
+{
+    char line[17];
+
+    LCD_Clear();
+
+    LCD_SetCursor(1, 1);
+    sprintf(line, "T:%02uC H:%02u%%", temp, hum);
+    LCD_String(line);
+
+    LCD_SetCursor(2, 1);
+    sprintf(line, "L:%02u A:%02u F:%u", light, air, fan_state);
+    LCD_String(line);
+}
