@@ -1,0 +1,131 @@
+#include <xc.h>
+#include <stdint.h>
+
+#define _XTAL_FREQ 8000000
+
+#pragma config FOSC = INTOSCIO_EC
+#pragma config WDT = OFF
+#pragma config LVP = OFF
+#pragma config PBADEN = OFF
+#pragma config MCLRE = ON
+#pragma config PLLDIV = 1
+#pragma config CPUDIV = OSC1_PLL2
+#pragma config USBDIV = 2
+#pragma config FCMEN = OFF
+#pragma config IESO = OFF
+
+#define MQ135_CHANNEL       2
+
+#define ALARM_TRIS          TRISDbits.TRISD3
+#define ALARM_LAT           LATDbits.LATD3
+
+#define AIR_BAD_LIMIT       65
+#define AIR_SAFE_LIMIT      50
+
+void System_Init(void);
+void ADC_Init(void);
+uint16_t ADC_Read(uint8_t channel);
+
+uint8_t MQ135_GetAirQualityPercent(void);
+void AirQuality_Control(uint8_t air_quality);
+
+void main(void)
+{
+    uint8_t air_quality;
+
+    System_Init();
+
+    while (1)
+    {
+        air_quality = MQ135_GetAirQualityPercent();
+
+        AirQuality_Control(air_quality);
+
+        __delay_ms(1000);
+    }
+}
+
+void System_Init(void)
+{
+    OSCCONbits.IRCF = 0b111;
+    OSCCONbits.SCS = 0b10;
+
+    ALARM_TRIS = 0;
+    ALARM_LAT = 0;
+
+    ADC_Init();
+}
+
+void ADC_Init(void)
+{
+    TRISAbits.TRISA2 = 1;
+
+    /*
+       ADCON1 = 0x0C:
+       AN0, AN1 y AN2 quedan como entradas analógicas.
+       El resto de pines se configuran como digitales.
+    */
+    ADCON1 = 0x0C;
+
+    ADCON2bits.ADFM = 1;
+    ADCON2bits.ACQT = 0b010;
+    ADCON2bits.ADCS = 0b110;
+
+    ADCON0bits.CHS = MQ135_CHANNEL;
+    ADCON0bits.ADON = 1;
+
+    __delay_ms(10);
+}
+
+uint16_t ADC_Read(uint8_t channel)
+{
+    uint16_t result;
+
+    ADCON0bits.CHS = channel;
+
+    __delay_us(20);
+
+    ADCON0bits.GO_DONE = 1;
+
+    while (ADCON0bits.GO_DONE);
+
+    result = ((uint16_t)ADRESH << 8) | ADRESL;
+
+    return result;
+}
+
+uint8_t MQ135_GetAirQualityPercent(void)
+{
+    uint16_t adc_value;
+    uint8_t air_quality;
+
+    /*
+       Lectura aproximada:
+       mayor voltaje en AOUT = mayor concentración detectada.
+       No se calcula PPM real todavía, solo un porcentaje relativo.
+    */
+    adc_value = ADC_Read(MQ135_CHANNEL);
+
+    air_quality = (uint8_t)(((uint32_t)adc_value * 100UL) / 1023UL);
+
+    if (air_quality > 100)
+        air_quality = 100;
+
+    return air_quality;
+}
+
+void AirQuality_Control(uint8_t air_quality)
+{
+    static uint8_t alarm_state = 0;
+
+    if (air_quality >= AIR_BAD_LIMIT)
+    {
+        alarm_state = 1;
+    }
+    else if (air_quality <= AIR_SAFE_LIMIT)
+    {
+        alarm_state = 0;
+    }
+
+    ALARM_LAT = alarm_state;
+}

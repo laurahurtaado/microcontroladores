@@ -1,0 +1,184 @@
+#include <xc.h>
+#include <stdint.h>
+
+#define _XTAL_FREQ 8000000
+
+#pragma config FOSC = INTOSCIO_EC
+#pragma config WDT = OFF
+#pragma config LVP = OFF
+#pragma config PBADEN = OFF
+#pragma config MCLRE = ON
+#pragma config PLLDIV = 1
+#pragma config CPUDIV = OSC1_PLL2
+#pragma config USBDIV = 2
+#pragma config FCMEN = OFF
+#pragma config IESO = OFF
+
+#define LM35_CHANNEL        0
+
+#define HEATER_TRIS         TRISDbits.TRISD1
+#define HEATER_LAT          LATDbits.LATD1
+
+#define STATUS_LED_TRIS     TRISDbits.TRISD2
+#define STATUS_LED_LAT      LATDbits.LATD2
+
+#define TEMP_ON_LIMIT       24
+#define TEMP_OFF_LIMIT      27
+
+#define TEMP_FILTER_SIZE    5
+
+void System_Init(void);
+
+void ADC_Init(void);
+uint16_t ADC_Read(uint8_t channel);
+
+uint8_t LM35_GetTemperatureC(void);
+uint8_t Temperature_Filter(uint8_t new_temperature);
+
+void Heater_Control(uint8_t temperature);
+void Status_LED_Update(uint8_t heater_state);
+
+void main(void)
+{
+    uint8_t temperature_raw;
+    uint8_t temperature_filtered;
+
+    System_Init();
+
+    while (1)
+    {
+        temperature_raw = LM35_GetTemperatureC();
+        temperature_filtered = Temperature_Filter(temperature_raw);
+
+        Heater_Control(temperature_filtered);
+
+        __delay_ms(1000);
+    }
+}
+
+void System_Init(void)
+{
+    OSCCONbits.IRCF = 0b111;
+    OSCCONbits.SCS = 0b10;
+
+    HEATER_TRIS = 0;
+    HEATER_LAT = 0;
+
+    STATUS_LED_TRIS = 0;
+    STATUS_LED_LAT = 0;
+
+    ADC_Init();
+}
+
+void ADC_Init(void)
+{
+    TRISAbits.TRISA0 = 1;
+
+    ADCON1 = 0x0E;
+
+    ADCON2bits.ADFM = 1;
+    ADCON2bits.ACQT = 0b010;
+    ADCON2bits.ADCS = 0b110;
+
+    ADCON0bits.CHS = LM35_CHANNEL;
+    ADCON0bits.ADON = 1;
+
+    __delay_ms(10);
+}
+
+uint16_t ADC_Read(uint8_t channel)
+{
+    uint16_t result;
+
+    ADCON0bits.CHS = channel;
+
+    __delay_us(20);
+
+    ADCON0bits.GO_DONE = 1;
+
+    while (ADCON0bits.GO_DONE);
+
+    result = ((uint16_t)ADRESH << 8) | ADRESL;
+
+    return result;
+}
+
+uint8_t LM35_GetTemperatureC(void)
+{
+    uint16_t adc_value;
+    uint16_t temperature;
+
+    adc_value = ADC_Read(LM35_CHANNEL);
+
+    /*
+       LM35: 10 mV por cada grado Celsius.
+       ADC de 10 bits con Vref = 5 V.
+
+       Voltaje_mV = adc_value * 5000 / 1023
+       Temperatura_C = Voltaje_mV / 10
+       Temperatura_C = adc_value * 500 / 1023
+    */
+
+    temperature = (uint16_t)(((uint32_t)adc_value * 500UL) / 1023UL);
+
+    if (temperature > 100)
+        temperature = 100;
+
+    return (uint8_t)temperature;
+}
+
+uint8_t Temperature_Filter(uint8_t new_temperature)
+{
+    static uint8_t buffer[TEMP_FILTER_SIZE] = {0};
+    static uint8_t index = 0;
+    static uint8_t samples = 0;
+
+    uint16_t sum = 0;
+    uint8_t i;
+
+    buffer[index] = new_temperature;
+    index++;
+
+    if (index >= TEMP_FILTER_SIZE)
+        index = 0;
+
+    if (samples < TEMP_FILTER_SIZE)
+        samples++;
+
+    for (i = 0; i < samples; i++)
+    {
+        sum += buffer[i];
+    }
+
+    return (uint8_t)(sum / samples);
+}
+
+void Heater_Control(uint8_t temperature)
+{
+    static uint8_t heater_state = 0;
+
+    if (temperature <= TEMP_ON_LIMIT)
+    {
+        heater_state = 1;
+    }
+    else if (temperature >= TEMP_OFF_LIMIT)
+    {
+        heater_state = 0;
+    }
+
+    HEATER_LAT = heater_state;
+
+    Status_LED_Update(heater_state);
+}
+
+void Status_LED_Update(uint8_t heater_state)
+{
+    if (heater_state)
+    {
+        STATUS_LED_LAT = 1;
+    }
+    else
+    {
+        STATUS_LED_LAT = 0;
+    }
+}

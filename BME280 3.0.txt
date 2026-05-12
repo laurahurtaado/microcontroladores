@@ -1,0 +1,446 @@
+#include <xc.h>
+#include <stdint.h>
+
+#define _XTAL_FREQ 8000000
+
+#pragma config FOSC = INTOSCIO_EC
+#pragma config WDT = OFF
+#pragma config LVP = OFF
+#pragma config PBADEN = OFF
+#pragma config MCLRE = ON
+#pragma config PLLDIV = 1
+#pragma config CPUDIV = OSC1_PLL2
+#pragma config USBDIV = 2
+#pragma config FCMEN = OFF
+#pragma config IESO = OFF
+
+#define BME280_ADDR       0x76
+#define BME280_ADDR_W     (BME280_ADDR << 1)
+#define BME280_ADDR_R     ((BME280_ADDR << 1) | 1)
+
+#define BME280_CHIP_ID_REG  0xD0
+#define BME280_EXPECTED_ID  0x60
+
+#define FAN_TRIS          TRISDbits.TRISD0
+#define FAN_LAT           LATDbits.LATD0
+
+#define ERROR_LED_TRIS    TRISDbits.TRISD4
+#define ERROR_LED_LAT     LATDbits.LATD4
+
+#define HUM_ON_LIMIT      70
+#define HUM_OFF_LIMIT     60
+
+#define HUM_FILTER_SIZE   5
+
+uint16_t dig_T1;
+int16_t  dig_T2, dig_T3;
+
+uint8_t  dig_H1, dig_H3;
+int16_t  dig_H2, dig_H4, dig_H5;
+int8_t   dig_H6;
+
+int32_t t_fine;
+uint8_t bme280_ok = 0;
+
+void System_Init(void);
+
+void I2C_Init(void);
+void I2C_Wait(void);
+void I2C_Start(void);
+void I2C_RepeatedStart(void);
+void I2C_Stop(void);
+uint8_t I2C_Write(uint8_t data);
+uint8_t I2C_Read(uint8_t ack);
+
+void BME280_WriteRegister(uint8_t reg, uint8_t value);
+uint8_t BME280_ReadRegister(uint8_t reg);
+uint16_t BME280_Read16_LE(uint8_t reg);
+int16_t BME280_ReadS16_LE(uint8_t reg);
+
+uint8_t BME280_CheckSensor(void);
+void BME280_Init(void);
+void BME280_ReadCalibration(void);
+int32_t BME280_ReadRawTemperature(void);
+int32_t BME280_ReadRawHumidity(void);
+int32_t BME280_CompensateTemperature(int32_t adc_T);
+uint32_t BME280_CompensateHumidity(int32_t adc_H);
+uint8_t BME280_GetHumidityPercent(void);
+
+uint8_t Humidity_Filter(uint8_t new_value);
+void Fan_Control(uint8_t humidity);
+void Error_Control(uint8_t error_state);
+
+void main(void)
+{
+    uint8_t humidity_raw;
+    uint8_t humidity_filtered;
+
+    System_Init();
+
+    bme280_ok = BME280_CheckSensor();
+
+    if (bme280_ok)
+    {
+        BME280_Init();
+        Error_Control(0);
+    }
+    else
+    {
+        Error_Control(1);
+        FAN_LAT = 0;
+    }
+
+    while (1)
+    {
+        if (bme280_ok)
+        {
+            humidity_raw = BME280_GetHumidityPercent();
+            humidity_filtered = Humidity_Filter(humidity_raw);
+
+            Fan_Control(humidity_filtered);
+            Error_Control(0);
+        }
+        else
+        {
+            FAN_LAT = 0;
+            Error_Control(1);
+        }
+
+        __delay_ms(1000);
+    }
+}
+
+void System_Init(void)
+{
+    OSCCONbits.IRCF = 0b111;
+    OSCCONbits.SCS = 0b10;
+
+    ADCON1 = 0x0F;
+
+    FAN_TRIS = 0;
+    FAN_LAT = 0;
+
+    ERROR_LED_TRIS = 0;
+    ERROR_LED_LAT = 0;
+
+    I2C_Init();
+
+    __delay_ms(200);
+}
+
+void I2C_Init(void)
+{
+    TRISBbits.TRISB0 = 1;
+    TRISBbits.TRISB1 = 1;
+
+    SSPSTAT = 0x80;
+    SSPCON1 = 0x28;
+    SSPCON2 = 0x00;
+
+    SSPADD = 19;
+
+    PIR1bits.SSPIF = 0;
+}
+
+void I2C_Wait(void)
+{
+    while ((SSPCON2 & 0x1F) || SSPSTATbits.R_nW);
+}
+
+void I2C_Start(void)
+{
+    I2C_Wait();
+    SSPCON2bits.SEN = 1;
+    while (SSPCON2bits.SEN);
+}
+
+void I2C_RepeatedStart(void)
+{
+    I2C_Wait();
+    SSPCON2bits.RSEN = 1;
+    while (SSPCON2bits.RSEN);
+}
+
+void I2C_Stop(void)
+{
+    I2C_Wait();
+    SSPCON2bits.PEN = 1;
+    while (SSPCON2bits.PEN);
+}
+
+uint8_t I2C_Write(uint8_t data)
+{
+    I2C_Wait();
+
+    SSPBUF = data;
+
+    while (!PIR1bits.SSPIF);
+    PIR1bits.SSPIF = 0;
+
+    return SSPCON2bits.ACKSTAT;
+}
+
+uint8_t I2C_Read(uint8_t ack)
+{
+    uint8_t data;
+
+    I2C_Wait();
+
+    SSPCON2bits.RCEN = 1;
+
+    while (!SSPSTATbits.BF);
+
+    data = SSPBUF;
+
+    I2C_Wait();
+
+    if (ack)
+        SSPCON2bits.ACKDT = 0;
+    else
+        SSPCON2bits.ACKDT = 1;
+
+    SSPCON2bits.ACKEN = 1;
+
+    while (SSPCON2bits.ACKEN);
+
+    return data;
+}
+
+void BME280_WriteRegister(uint8_t reg, uint8_t value)
+{
+    I2C_Start();
+    I2C_Write(BME280_ADDR_W);
+    I2C_Write(reg);
+    I2C_Write(value);
+    I2C_Stop();
+}
+
+uint8_t BME280_ReadRegister(uint8_t reg)
+{
+    uint8_t value;
+
+    I2C_Start();
+    I2C_Write(BME280_ADDR_W);
+    I2C_Write(reg);
+
+    I2C_RepeatedStart();
+    I2C_Write(BME280_ADDR_R);
+
+    value = I2C_Read(0);
+
+    I2C_Stop();
+
+    return value;
+}
+
+uint16_t BME280_Read16_LE(uint8_t reg)
+{
+    uint8_t lsb, msb;
+
+    lsb = BME280_ReadRegister(reg);
+    msb = BME280_ReadRegister(reg + 1);
+
+    return ((uint16_t)msb << 8) | lsb;
+}
+
+int16_t BME280_ReadS16_LE(uint8_t reg)
+{
+    return (int16_t)BME280_Read16_LE(reg);
+}
+
+uint8_t BME280_CheckSensor(void)
+{
+    uint8_t chip_id;
+
+    chip_id = BME280_ReadRegister(BME280_CHIP_ID_REG);
+
+    if (chip_id == BME280_EXPECTED_ID)
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+void BME280_Init(void)
+{
+    BME280_WriteRegister(0xE0, 0xB6);
+    __delay_ms(100);
+
+    BME280_ReadCalibration();
+
+    BME280_WriteRegister(0xF2, 0x01);
+    BME280_WriteRegister(0xF4, 0x27);
+    BME280_WriteRegister(0xF5, 0xA0);
+
+    __delay_ms(100);
+}
+
+void BME280_ReadCalibration(void)
+{
+    uint8_t e4, e5, e6;
+
+    dig_T1 = BME280_Read16_LE(0x88);
+    dig_T2 = BME280_ReadS16_LE(0x8A);
+    dig_T3 = BME280_ReadS16_LE(0x8C);
+
+    dig_H1 = BME280_ReadRegister(0xA1);
+    dig_H2 = BME280_ReadS16_LE(0xE1);
+    dig_H3 = BME280_ReadRegister(0xE3);
+
+    e4 = BME280_ReadRegister(0xE4);
+    e5 = BME280_ReadRegister(0xE5);
+    e6 = BME280_ReadRegister(0xE6);
+
+    dig_H4 = ((int16_t)e4 << 4) | (e5 & 0x0F);
+    dig_H5 = ((int16_t)e6 << 4) | (e5 >> 4);
+    dig_H6 = (int8_t)BME280_ReadRegister(0xE7);
+}
+
+int32_t BME280_ReadRawTemperature(void)
+{
+    uint8_t msb, lsb, xlsb;
+    int32_t raw;
+
+    msb = BME280_ReadRegister(0xFA);
+    lsb = BME280_ReadRegister(0xFB);
+    xlsb = BME280_ReadRegister(0xFC);
+
+    raw = ((int32_t)msb << 12) | ((int32_t)lsb << 4) | ((int32_t)xlsb >> 4);
+
+    return raw;
+}
+
+int32_t BME280_ReadRawHumidity(void)
+{
+    uint8_t msb, lsb;
+    int32_t raw;
+
+    msb = BME280_ReadRegister(0xFD);
+    lsb = BME280_ReadRegister(0xFE);
+
+    raw = ((int32_t)msb << 8) | lsb;
+
+    return raw;
+}
+
+int32_t BME280_CompensateTemperature(int32_t adc_T)
+{
+    int32_t var1, var2, T;
+
+    var1 = ((((adc_T >> 3) - ((int32_t)dig_T1 << 1))) * ((int32_t)dig_T2)) >> 11;
+
+    var2 = (((((adc_T >> 4) - ((int32_t)dig_T1)) *
+              ((adc_T >> 4) - ((int32_t)dig_T1))) >> 12) *
+              ((int32_t)dig_T3)) >> 14;
+
+    t_fine = var1 + var2;
+
+    T = (t_fine * 5 + 128) >> 8;
+
+    return T;
+}
+
+uint32_t BME280_CompensateHumidity(int32_t adc_H)
+{
+    int32_t v_x1_u32r;
+
+    v_x1_u32r = t_fine - 76800;
+
+    v_x1_u32r = (((((adc_H << 14) - (((int32_t)dig_H4) << 20) -
+                    (((int32_t)dig_H5) * v_x1_u32r)) + 16384) >> 15) *
+                  (((((((v_x1_u32r * ((int32_t)dig_H6)) >> 10) *
+                       (((v_x1_u32r * ((int32_t)dig_H3)) >> 11) + 32768)) >> 10) +
+                     2097152) * ((int32_t)dig_H2) + 8192) >> 14));
+
+    v_x1_u32r = v_x1_u32r -
+                (((((v_x1_u32r >> 15) * (v_x1_u32r >> 15)) >> 7) *
+                  ((int32_t)dig_H1)) >> 4);
+
+    if (v_x1_u32r < 0)
+        v_x1_u32r = 0;
+
+    if (v_x1_u32r > 419430400)
+        v_x1_u32r = 419430400;
+
+    return (uint32_t)(v_x1_u32r >> 12);
+}
+
+uint8_t BME280_GetHumidityPercent(void)
+{
+    int32_t adc_T;
+    int32_t adc_H;
+    uint32_t humidity_x1024;
+    uint8_t humidity_percent;
+
+    adc_T = BME280_ReadRawTemperature();
+    BME280_CompensateTemperature(adc_T);
+
+    adc_H = BME280_ReadRawHumidity();
+    humidity_x1024 = BME280_CompensateHumidity(adc_H);
+
+    humidity_percent = (uint8_t)(humidity_x1024 / 1024);
+
+    if (humidity_percent > 100)
+        humidity_percent = 100;
+
+    return humidity_percent;
+}
+
+uint8_t Humidity_Filter(uint8_t new_value)
+{
+    static uint8_t buffer[HUM_FILTER_SIZE] = {0};
+    static uint8_t index = 0;
+    static uint8_t samples = 0;
+
+    uint16_t sum = 0;
+    uint8_t i;
+
+    buffer[index] = new_value;
+    index++;
+
+    if (index >= HUM_FILTER_SIZE)
+    {
+        index = 0;
+    }
+
+    if (samples < HUM_FILTER_SIZE)
+    {
+        samples++;
+    }
+
+    for (i = 0; i < samples; i++)
+    {
+        sum += buffer[i];
+    }
+
+    return (uint8_t)(sum / samples);
+}
+
+void Fan_Control(uint8_t humidity)
+{
+    static uint8_t fan_state = 0;
+
+    if (humidity >= HUM_ON_LIMIT)
+    {
+        fan_state = 1;
+    }
+    else if (humidity <= HUM_OFF_LIMIT)
+    {
+        fan_state = 0;
+    }
+
+    FAN_LAT = fan_state;
+}
+
+void Error_Control(uint8_t error_state)
+{
+    if (error_state)
+    {
+        ERROR_LED_LAT = 1;
+    }
+    else
+    {
+        ERROR_LED_LAT = 0;
+    }
+}
