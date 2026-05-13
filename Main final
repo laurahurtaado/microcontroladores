@@ -1,0 +1,338 @@
+    /*
+SISTEMA AMBIENTAL COMPLETO - VERSION FINAL PRO
+PIC18F4550 @ 8 MHz
+*/
+
+#pragma config PLLDIV = 1, CPUDIV = OSC1_PLL2, USBDIV = 1
+#pragma config FOSC = INTOSCIO_EC, FCMEN = OFF, IESO = OFF
+#pragma config PWRT = OFF, BOR = OFF, BORV = 3, VREGEN = OFF
+#pragma config WDT = OFF
+#pragma config CCP2MX = ON, PBADEN = OFF, LPT1OSC = OFF, MCLRE = ON
+#pragma config STVREN = ON, LVP = OFF, ICPRT = OFF, XINST = OFF
+    
+#define _XTAL_FREQ 8000000
+
+#include <xc.h>
+#include <stdio.h>
+
+//================ LIBRERIAS =================
+#include "i2c.h"
+#include "ssd1306_oled.h"
+#include "bme280.h"
+
+//================ DEFINICIONES =================
+#define BUZZER LATCbits.LATC1
+#define HEATER LATCbits.LATC0
+
+// DHT11 EN RB2
+#define DHT11_PIN  PORTBbits.RB2
+#define DHT11_TRIS TRISBbits.TRISB2
+
+//================ VARIABLES =================
+unsigned int contador_gas = 0;
+unsigned char estado_calentador = 0;
+
+//================ ADC =================
+void ADC_Init()
+{
+    ADCON0 = 0x00;
+
+    ADCON1 = 0x0C;
+
+    ADCON2 = 0xA9;
+
+    ADCON0bits.ADON = 1;
+}
+
+unsigned int ADC_Read(unsigned char canal)
+{
+    ADCON0bits.CHS = canal;
+
+    ADCON0bits.ADON = 0;
+
+    __delay_us(5);
+
+    ADCON0bits.ADON = 1;
+
+    __delay_us(50);
+
+    ADCON0bits.GO = 1;
+
+    while(ADCON0bits.GO);
+
+    return ((unsigned int)ADRESH << 8) | ADRESL;
+}
+
+//================ DHT11 =================
+void DHT11_Start()
+{
+    DHT11_TRIS = 0;
+
+    LATBbits.LATB2 = 0;
+
+    __delay_ms(20);
+
+    LATBbits.LATB2 = 1;
+
+    __delay_us(30);
+
+    DHT11_TRIS = 1;
+}
+
+unsigned char DHT11_CheckResponse()
+{
+    unsigned char response = 0;
+
+    __delay_us(40);
+
+    if(!DHT11_PIN)
+    {
+        __delay_us(80);
+
+        if(DHT11_PIN)
+            response = 1;
+
+        while(DHT11_PIN);
+    }
+
+    return response;
+}
+
+unsigned char DHT11_ReadByte()
+{
+    unsigned char i;
+    unsigned char data = 0;
+
+    for(i = 0; i < 8; i++)
+    {
+        while(!DHT11_PIN);
+
+        __delay_us(30);
+
+        if(DHT11_PIN)
+            data = (data << 1) | 1;
+        else
+            data = (data << 1);
+
+        while(DHT11_PIN);
+    }
+
+    return data;
+}
+
+float DHT11_ReadTemperature()
+{
+    unsigned char Rh_byte1, Rh_byte2;
+    unsigned char Temp_byte1, Temp_byte2;
+    unsigned char checksum;
+
+    DHT11_Start();
+
+    if(DHT11_CheckResponse())
+    {
+        Rh_byte1   = DHT11_ReadByte();
+        Rh_byte2   = DHT11_ReadByte();
+
+        Temp_byte1 = DHT11_ReadByte();
+        Temp_byte2 = DHT11_ReadByte();
+
+        checksum   = DHT11_ReadByte();
+
+        if(checksum == (Rh_byte1 + Rh_byte2 + Temp_byte1 + Temp_byte2))
+        {
+            return (float)Temp_byte1;
+        }
+    }
+
+    return 0;
+}
+
+//================ CONTROL =================
+
+// ---- LUZ ----
+void Control_Luz(unsigned int luz)
+{
+    if(luz < 200)
+        LATD = 0b00001111;
+    else if(luz < 500)
+        LATD = 0b00000011;
+    else
+        LATD = 0;
+}
+
+// ---- TEMPERATURA ----
+void Control_Temperatura(float temp)
+{
+    if(estado_calentador == 0)
+    {
+        if(temp < 25)
+        {
+            HEATER = 1;
+            estado_calentador = 1;
+        }
+    }
+    else
+    {
+        if(temp > 28)
+        {
+            HEATER = 0;
+            estado_calentador = 0;
+        }
+    }
+}
+
+//================ PWM =================
+void PWM_Init()
+{
+    TRISCbits.TRISC2 = 0;
+
+    PR2 = 249;
+
+    CCP1CON = 0b00001100;
+
+    T2CON = 0b00000100;
+}
+
+void PWM_SetDuty_Percent(unsigned char percent)
+{
+    unsigned int duty;
+
+    if(percent > 100)
+        percent = 100;
+
+    duty = (percent * 1023) / 100;
+
+    CCPR1L = (unsigned char)(duty >> 2);
+
+    CCP1CONbits.DC1B = duty & 0x03;
+}
+
+// ---- VENTILACI N ----
+void Control_Ventilacion(float humedad, unsigned int gas_valor)
+{
+    if(gas_valor > 500)
+    {
+        PWM_SetDuty_Percent(100);
+        return;
+    }
+
+    if(humedad < 35)
+        PWM_SetDuty_Percent(0);
+    else if(humedad < 45)
+        PWM_SetDuty_Percent(50);
+    else
+        PWM_SetDuty_Percent(90);
+}
+
+// ---- BUZZER ----
+void Control_Buzzer(unsigned int gas_valor)
+{
+    if(gas_valor > 500)
+    {
+        contador_gas++;
+
+        if(contador_gas > 6)
+            BUZZER = 1;
+    }
+    else
+    {
+        contador_gas = 0;
+
+        BUZZER = 0;
+    }
+}
+
+//================ MAIN =================
+void main()
+{
+    // Oscilador interno 8 MHz
+    OSCCONbits.IRCF = 0b111;
+    OSCCONbits.SCS  = 0b11;
+
+    while(!OSCCONbits.IOFS);
+
+    CMCON = 0x07;
+
+    //================ PUERTOS =================
+    TRISD = 0x00;
+    LATD = 0;
+
+    // MQ135 y LDR
+    TRISAbits.TRISA0 = 1;
+    TRISAbits.TRISA1 = 1;
+
+    // Heater, buzzer y PWM
+    TRISCbits.TRISC0 = 0;
+    TRISCbits.TRISC1 = 0;
+    TRISCbits.TRISC2 = 0;
+
+    // DHT11
+    TRISBbits.TRISB2 = 1;
+
+    BUZZER = 0;
+    HEATER = 0;
+
+    //================ INICIALIZACI N =================
+    ADC_Init();
+
+    PWM_Init();
+
+    I2C_Init_Master(I2C_100KHZ);
+
+    OLED_Init();
+
+    BME280_Init();
+
+    //================ VARIABLES =================
+    char line1[20];
+    char line2[20];
+    char line3[20];
+
+    while(1)
+    {
+        //========= LECTURAS =========
+
+        unsigned int mq135 = ADC_Read(0);
+
+        unsigned int ldr = ADC_Read(1);
+
+        float humedad = BME280_GetHumidity();
+
+        float temp = DHT11_ReadTemperature();
+
+        //========= CONTROL =========
+
+        Control_Luz(ldr);
+
+        Control_Temperatura(temp);
+
+        Control_Ventilacion(humedad, mq135);
+
+        Control_Buzzer(mq135);
+
+        //========= OLED =========
+
+        OLED_ClearDisplay();
+
+        OLED_SetFont(FONT_1);
+
+        sprintf(line1, "T:%.1fC H:%.1f%%", temp, humedad);
+
+        OLED_Write_Text(0, 0, line1);
+
+        if(mq135 > 500)
+            sprintf(line2, "GAS:%u MALO", mq135);
+        else
+            sprintf(line2, "GAS:%u BUENO", mq135);
+
+        OLED_Write_Text(0, 20, line2);
+
+        sprintf(line3, "L:%u", ldr);
+
+        OLED_Write_Text(0, 40, line3);
+
+        OLED_Update();
+
+        __delay_ms(500);
+    }
+}
