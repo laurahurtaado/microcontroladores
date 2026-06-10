@@ -1,0 +1,112 @@
+#include "ds18b20.h"
+
+#define DQ PORTBbits.RB2
+#define DQ_DIR TRISBbits.TRISB2
+
+static void OneWire_WriteBit(unsigned char bit)
+{
+    DQ_DIR = 0;
+    DQ = 0;
+
+    if(bit)
+    {
+        __delay_us(5);
+        DQ_DIR = 1;
+        __delay_us(55);
+    }
+    else
+    {
+        __delay_us(60);
+        DQ_DIR = 1;
+        __delay_us(5);
+    }
+}
+
+static unsigned char OneWire_ReadBit(void)
+{
+    unsigned char bit;
+
+    DQ_DIR = 0;
+    DQ = 0;
+    __delay_us(2);
+
+    DQ_DIR = 1;
+    __delay_us(10);
+
+    bit = DQ;
+
+    __delay_us(50);
+
+    return bit;
+}
+
+static void OneWire_WriteByte(unsigned char data)
+{
+    unsigned char i;
+
+    for(i=0; i<8; i++)
+    {
+        OneWire_WriteBit(data & 0x01);
+        data >>= 1;
+    }
+}
+
+static unsigned char OneWire_ReadByte(void)
+{
+    unsigned char data = 0;
+    unsigned char i;
+
+    for(i=0; i<8; i++)
+    {
+        if(OneWire_ReadBit())
+            data |= (1 << i);
+    }
+
+    return data;
+}
+
+static unsigned char OneWire_Reset(void)
+{
+    unsigned char presence;
+
+    DQ_DIR = 0;
+    DQ = 0;
+
+    __delay_us(480);
+
+    DQ_DIR = 1;
+
+    __delay_us(70);
+
+    presence = !DQ;
+
+    __delay_us(410);
+
+    return presence;
+}
+
+float DS18B20_ReadTemperature(void)
+{
+    unsigned char temp_l;
+    unsigned char temp_h;
+    int temp;
+
+    OneWire_Reset();
+
+    OneWire_WriteByte(0xCC);
+    OneWire_WriteByte(0x44);
+
+    __delay_ms(750);
+
+    OneWire_Reset();
+
+    OneWire_WriteByte(0xCC);
+    OneWire_WriteByte(0xBE);
+
+    temp_l = OneWire_ReadByte();
+    temp_h = OneWire_ReadByte();
+
+    temp = ((int)temp_h << 8) | temp_l;
+
+    return ((float)temp)/16.0;
+}
